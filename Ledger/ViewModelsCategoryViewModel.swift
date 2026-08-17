@@ -206,9 +206,10 @@ final class CategoryViewModel {
     /// - Parameter category: The category to check.
     /// - Returns: The number of transactions using this category.
     func transactionCount(for category: Category) -> Int {
+        let categoryID = category.id
         let fetchDescriptor = FetchDescriptor<Transaction>(
-            predicate: #Predicate { transaction in
-                transaction.category?.id == category.id
+            predicate: #Predicate<Transaction> { transaction in
+                transaction.category?.id == categoryID
             }
         )
         

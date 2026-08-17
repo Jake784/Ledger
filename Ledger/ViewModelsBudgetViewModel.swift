@@ -177,11 +177,13 @@ final class BudgetViewModel {
     /// Calculates actual spending in a category for a specific month/year.
     private func calculateSpending(for category: Category, month: Int, year: Int) -> Decimal {
         // Fetch all expense transactions in this category for this month/year
+        let expenseRawValue = TransactionType.expense.rawValue
+        let categoryID = category.id
         let fetchDescriptor = FetchDescriptor<Transaction>(
             predicate: #Predicate<Transaction> { transaction in
-                transaction.type == .expense &&
+                transaction.type.rawValue == expenseRawValue &&
                 transaction.isPending == false &&
-                transaction.category?.id == category.id
+                transaction.category?.id == categoryID
             }
         )
         
