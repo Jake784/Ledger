@@ -89,23 +89,26 @@ final class TransactionListViewModel {
     /// Separates transactions into completed and pending arrays, then calculates
     /// monthly, yearly, and historic totals based on completed transactions only.
     func loadTransactions() {
-        // Capture type in a local variable for predicate
-        let transactionType = self.type
-        
-        // Fetch all transactions of this type
+        // SwiftData's #Predicate macro doesn't support comparing a model's custom
+        // enum property against a captured enum constant — it throws
+        // `SwiftDataError.unsupportedPredicate` ("Captured/constant values of type
+        // 'TransactionType' are not supported") at fetch time, even when the value is
+        // hoisted to a local `let` first. Fetch without filtering by `type` in the
+        // predicate and split by type in plain Swift instead, matching
+        // `DashboardViewModel.calculateCurrentCapital()`'s already-working pattern,
+        // which filters only on `isPending` (a Bool) in the predicate and switches on
+        // `transaction.type` after fetching.
         let fetchDescriptor = FetchDescriptor<Transaction>(
-            predicate: #Predicate<Transaction> { transaction in
-                transaction.type == transactionType
-            },
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
-        
+
         do {
             let allTransactions = try modelContext.fetch(fetchDescriptor)
-            
+            let transactionsOfType = allTransactions.filter { $0.type == type }
+
             // Separate completed and pending transactions
-            let completed = allTransactions.filter { !$0.isPending }
-            let pending = allTransactions.filter { $0.isPending }
+            let completed = transactionsOfType.filter { !$0.isPending }
+            let pending = transactionsOfType.filter { $0.isPending }
             
             // Sort completed by date descending (most recent first)
             self.transactions = completed.sorted { $0.date > $1.date }

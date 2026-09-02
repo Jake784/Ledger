@@ -176,31 +176,40 @@ final class BudgetViewModel {
     
     /// Calculates actual spending in a category for a specific month/year.
     private func calculateSpending(for category: Category, month: Int, year: Int) -> Decimal {
-        // Fetch all expense transactions in this category for this month/year
-        let expenseRawValue = TransactionType.expense.rawValue
+        // The previous `transaction.type.rawValue == expenseRawValue` clause here was not
+        // actually a working #Predicate fix: SwiftData's macro can't resolve `.rawValue` as
+        // a persisted keypath member of a custom enum property, and throws an uncatchable
+        // `Fatal error` ("Failed to validate \Transaction.type.rawValue because rawValue is
+        // not a member of TransactionType") the moment this runs — confirmed by directly
+        // calling `createBudget()` against a real store. Comparing the enum itself (without
+        // `.rawValue`) isn't supported either, for a different reason (`SwiftDataError
+        // .unsupportedPredicate`, the same issue fixed in `TransactionListViewModel`/
+        // `HistoryViewModel`). Filter only on the safe Bool/UUID predicate terms and filter
+        // by `type` in plain Swift instead, matching `DashboardViewModel
+        // .calculateCurrentCapital()`'s already-working pattern.
         let categoryID = category.id
         let fetchDescriptor = FetchDescriptor<Transaction>(
             predicate: #Predicate<Transaction> { transaction in
-                transaction.type.rawValue == expenseRawValue &&
                 transaction.isPending == false &&
                 transaction.category?.id == categoryID
             }
         )
-        
+
         do {
             let transactions = try modelContext.fetch(fetchDescriptor)
             let calendar = Calendar.current
-            
-            // Filter to current month/year and sum amounts
+
+            // Filter to expense transactions in the current month/year and sum amounts
             let total = transactions
+                .filter { $0.type == .expense }
                 .filter { transaction in
                     let components = calendar.dateComponents([.month, .year], from: transaction.date)
                     return components.month == month && components.year == year
                 }
                 .reduce(Decimal(0)) { $0 + $1.amount }
-            
+
             return total
-            
+
         } catch {
             print("Failed to calculate spending for category \(category.name): \(error)")
             return 0

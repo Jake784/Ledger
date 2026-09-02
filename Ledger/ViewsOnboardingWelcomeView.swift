@@ -86,7 +86,7 @@ struct WelcomeView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(Color.accentColor)
 
-            Text("Bienvenido a FinVault")
+            Text("Bienvenido a Ledger")
                 .font(.largeTitle.weight(.bold))
 
             Text("Tu espacio personal para organizar ingresos, gastos y metas con claridad.")
