@@ -23,18 +23,39 @@ struct DashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var viewModel: DashboardViewModel
 
+    /// Owned only for its read-only `goals` (summed into `goalsTargetAmount`, for
+    /// the Ahorros card's progress ring) — the Dashboard never creates, edits, or
+    /// deletes goals, so this mirrors `DashboardViewModel`'s own manual-refresh
+    /// pattern rather than duplicating any of `GoalViewModel`'s logic.
+    @State private var goalViewModel: GoalViewModel
+
+    /// Owned only so the Dashboard's "Agregar Ingreso" / "Agregar Gasto" quick
+    /// actions can present `IncomeView`/`ExpensesView`'s own add sheets unchanged —
+    /// the Dashboard never lists or otherwise reads these view models' state.
+    @State private var incomeViewModel: TransactionListViewModel
+    @State private var expenseViewModel: TransactionListViewModel
+
+    @State private var isPresentingAddIncome = false
+    @State private var isPresentingAddExpense = false
+
     @Query(sort: \Currency.code) private var currencies: [Currency]
     @Query private var userProfiles: [UserProfile]
+    @Query(sort: \Category.name) private var allCategories: [Category]
 
     init(modelContext: ModelContext) {
         _viewModel = State(initialValue: DashboardViewModel(modelContext: modelContext))
+        _goalViewModel = State(initialValue: GoalViewModel(modelContext: modelContext))
+        _incomeViewModel = State(initialValue: TransactionListViewModel(modelContext: modelContext, type: .income))
+        _expenseViewModel = State(initialValue: TransactionListViewModel(modelContext: modelContext, type: .expense))
     }
 
     var body: some View {
         ScrollView {
             if let currency = displayCurrency {
                 VStack(alignment: .leading, spacing: 24) {
+                    headerSection
                     capitalSection(currency: currency)
+                    quickActionsRow
                     summaryCardsRow(currency: currency)
                     breakdownSection(currency: currency)
                 }
@@ -47,69 +68,191 @@ struct DashboardView: View {
         .navigationTitle("Panel")
         .onAppear {
             viewModel.loadDashboardData()
+            goalViewModel.loadGoals()
+        }
+        .sheet(isPresented: $isPresentingAddIncome, onDismiss: { viewModel.loadDashboardData() }) {
+            if let currency = displayCurrency {
+                AddIncomeSheet(viewModel: incomeViewModel, currency: currency, categories: incomeCategories)
+            }
+        }
+        .sheet(isPresented: $isPresentingAddExpense, onDismiss: { viewModel.loadDashboardData() }) {
+            if let currency = displayCurrency {
+                AddExpenseSheet(viewModel: expenseViewModel, currency: currency, categories: expenseCategories)
+            }
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Header
 
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: .now) {
+        case 5..<12: return "Buenos días"
+        case 12..<19: return "Buenas tardes"
+        default: return "Buenas noches"
+        }
+    }
+
+    private var userName: String { userProfiles.first?.name ?? "" }
+
+    private var userInitials: String {
+        let letters = userName.split(separator: " ").prefix(2).compactMap(\.first)
+        return String(letters).uppercased()
+    }
+
+    private var headerSection: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(userName.isEmpty ? greeting : "\(greeting), \(userName)")
+                    .font(.title2.weight(.semibold))
+
+                Text(Date.now.formatted(Date.FormatStyle(date: .complete, time: .omitted, locale: Locale(identifier: "es"))))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            avatarView
+        }
+    }
+
+    private var avatarView: some View {
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(0.15))
+
+            if userInitials.isEmpty {
+                Image(systemName: userProfiles.first?.avatarSystemImage ?? "person.fill")
+                    .foregroundStyle(Color.accentColor)
+            } else {
+                Text(userInitials)
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - Bento Sections
+
+    /// "Capital Actual" and "Ahorros" as a paired, equal-hierarchy hero
+    /// row — side by side when there's room, stacked with equal weight
+    /// otherwise — grouped in one `GlassEffectContainer` since they're
+    /// adjacent glass surfaces that should render/refract as a single cluster.
     private func capitalSection(currency: Currency) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            CapitalHeaderCard(
-                currentCapital: viewModel.currentCapital,
-                currency: currency,
-                modelContext: modelContext,
-                onAdjusted: { viewModel.loadDashboardData() }
-            )
-            .layoutPriority(1)
+        GlassEffectContainer {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    capitalHeaderCard(currency: currency)
+                    savingsSummaryCard(currency: currency)
+                }
 
-            SavingsSummaryCard(
-                totalSavings: viewModel.totalSavings,
-                currency: currency
-            )
-            .frame(width: 220)
+                VStack(spacing: 16) {
+                    capitalHeaderCard(currency: currency)
+                    savingsSummaryCard(currency: currency)
+                }
+            }
+        }
+    }
+
+    private func capitalHeaderCard(currency: Currency) -> some View {
+        CapitalHeaderCard(
+            currentCapital: viewModel.currentCapital,
+            currency: currency,
+            modelContext: modelContext,
+            onAdjusted: { viewModel.loadDashboardData() }
+        )
+        .frame(maxWidth: .infinity)
+    }
+
+    private func savingsSummaryCard(currency: Currency) -> some View {
+        SavingsSummaryCard(
+            totalSavings: viewModel.totalSavings,
+            currency: currency,
+            goalsTargetAmount: goalsTargetAmount
+        )
+        .frame(maxWidth: .infinity)
+    }
+
+    private var quickActionsRow: some View {
+        GlassEffectContainer {
+            HStack(spacing: 16) {
+                DashboardQuickActionButton(
+                    title: "Agregar Ingreso",
+                    icon: "arrow.down.circle.fill",
+                    accentColor: .green,
+                    action: { isPresentingAddIncome = true }
+                )
+
+                DashboardQuickActionButton(
+                    title: "Agregar Gasto",
+                    icon: "arrow.up.circle.fill",
+                    accentColor: .red,
+                    action: { isPresentingAddExpense = true }
+                )
+            }
         }
     }
 
     private func summaryCardsRow(currency: Currency) -> some View {
-        HStack(spacing: 16) {
-            MetricCard(
-                label: "Ingresos del Mes",
-                value: viewModel.monthlyIncome,
-                currency: currency,
-                color: .green,
-                icon: "arrow.down.circle",
-                tinted: true
-            )
+        GlassEffectContainer {
+            HStack(spacing: 16) {
+                DashboardMetricCard(
+                    label: "Ingresos del Mes",
+                    value: viewModel.monthlyIncome,
+                    currency: currency,
+                    accentColor: .green,
+                    icon: "arrow.down.circle"
+                )
 
-            MetricCard(
-                label: "Gastos del Mes",
-                value: viewModel.monthlyExpenses,
-                currency: currency,
-                color: .red,
-                icon: "arrow.up.circle",
-                tinted: true
-            )
+                DashboardMetricCard(
+                    label: "Gastos del Mes",
+                    value: viewModel.monthlyExpenses,
+                    currency: currency,
+                    accentColor: .red,
+                    icon: "arrow.up.circle"
+                )
+            }
         }
     }
 
     private func breakdownSection(currency: Currency) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            CategoryBreakdownChart(
-                title: "Gastos por Categoría",
-                icon: "chart.pie",
-                data: viewModel.topExpenseCategories(),
-                currency: currency,
-                emptyStateMessage: "Aún no tienes gastos este mes."
-            )
+        GlassEffectContainer {
+            HStack(alignment: .top, spacing: 16) {
+                CategoryBreakdownChart(
+                    title: "Gastos por Categoría",
+                    icon: "chart.pie",
+                    data: viewModel.topExpenseCategories(),
+                    currency: currency,
+                    emptyStateMessage: "Aún no tienes gastos este mes."
+                )
 
-            CategoryBreakdownChart(
-                title: "Ingresos por Categoría",
-                icon: "chart.pie",
-                data: viewModel.topIncomeCategories(),
-                currency: currency,
-                emptyStateMessage: "Aún no tienes ingresos este mes."
-            )
+                CategoryBreakdownChart(
+                    title: "Ingresos por Categoría",
+                    icon: "chart.pie",
+                    data: viewModel.topIncomeCategories(),
+                    currency: currency,
+                    emptyStateMessage: "Aún no tienes ingresos este mes."
+                )
+            }
         }
+    }
+
+    // MARK: - Derived Data
+
+    /// Combined target amount across every goal, used by `SavingsSummaryCard`
+    /// to render its progress ring. Zero (no ring shown) when the user has no goals.
+    private var goalsTargetAmount: Decimal {
+        goalViewModel.goals.reduce(Decimal(0)) { $0 + $1.targetAmount }
+    }
+
+    private var incomeCategories: [Category] {
+        allCategories.filter { $0.type == .income }
+    }
+
+    private var expenseCategories: [Category] {
+        allCategories.filter { $0.type == .expense }
     }
 
     // MARK: - Currency Resolution

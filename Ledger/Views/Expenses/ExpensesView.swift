@@ -214,7 +214,12 @@ struct ExpensesView: View {
 /// Calls straight through to `TransactionListViewModel.addTransaction` or
 /// `.addPendingTransaction`, which already handle amount calculation,
 /// `RecurrenceRule` persistence, and reloading — this sheet only collects input.
-private struct AddExpenseSheet: View {
+///
+/// **Where Used:**
+/// - `ExpensesView`'s own "Agregar Gasto" toolbar action.
+/// - `DashboardView`'s "Agregar Gasto" quick action, reusing this exact form
+///   rather than duplicating it.
+struct AddExpenseSheet: View {
     let viewModel: TransactionListViewModel
     let currency: Currency
     let categories: [Category]
@@ -236,6 +241,20 @@ private struct AddExpenseSheet: View {
     @State private var frequency: RecurrenceFrequency = .monthly
     @State private var isSaving = false
     @State private var errorMessage: String?
+
+    /// The keyboard-navigable fields, in Tab order. `category` needs an
+    /// explicit case (not just auto-focus): a `.menu`-style `Picker` is
+    /// backed by an `NSPopUpButton`, which macOS excludes from the default
+    /// Tab loop unless the user has System Settings' Full Keyboard Access
+    /// enabled — without `.focusable()` + this binding, Tab silently skips
+    /// straight from Amount to Date.
+    private enum Field: Hashable {
+        case description
+        case amount
+        case category
+    }
+
+    @FocusState private var focusedField: Field?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -268,6 +287,9 @@ private struct AddExpenseSheet: View {
         }
         .padding(32)
         .frame(width: 420)
+        .onAppear {
+            focusedField = .description
+        }
     }
 
     // MARK: - Sections
@@ -300,6 +322,7 @@ private struct AddExpenseSheet: View {
 
             TextField("Ej. Renta de agosto", text: $descriptionText)
                 .textFieldStyle(.plain)
+                .focused($focusedField, equals: .description)
         }
     }
 
@@ -317,6 +340,7 @@ private struct AddExpenseSheet: View {
                 TextField("0.00", value: $amount, format: .number.precision(.fractionLength(2)))
                     .textFieldStyle(.plain)
                     .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .focused($focusedField, equals: .amount)
             }
         }
     }
@@ -329,6 +353,12 @@ private struct AddExpenseSheet: View {
             }
         }
         .pickerStyle(.menu)
+        // `.menu` pickers are backed by NSPopUpButton, which macOS leaves out
+        // of the Tab key loop by default — `.focusable()` opts it back in so
+        // Tab reaches Category without depending on the user's system-wide
+        // Full Keyboard Access setting.
+        .focusable()
+        .focused($focusedField, equals: .category)
     }
 
     private var datePicker: some View {
@@ -353,6 +383,7 @@ private struct AddExpenseSheet: View {
                 dismiss()
             }
             .buttonStyle(SecondaryButtonStyle())
+            .keyboardShortcut(.cancelAction)
 
             Button {
                 handleSave()
@@ -368,6 +399,10 @@ private struct AddExpenseSheet: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(isSaving || descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount <= 0)
+            // Makes this the window's default button, so Return submits from
+            // any field — standard macOS form behavior — without hijacking
+            // Return in individual fields to mean "next field" instead.
+            .keyboardShortcut(.defaultAction)
         }
     }
 

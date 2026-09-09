@@ -31,28 +31,28 @@ struct CategoryBreakdownChart: View {
     }
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(title)
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.headline)
 
-                if data.isEmpty {
-                    EmptyStateView(
-                        icon: icon,
-                        title: emptyStateMessage,
-                        compact: true
-                    )
-                } else {
-                    HStack(alignment: .center, spacing: 20) {
-                        chart
-                            .frame(width: 130, height: 130)
+            if data.isEmpty {
+                EmptyStateView(
+                    icon: icon,
+                    title: emptyStateMessage,
+                    compact: true
+                )
+            } else {
+                HStack(alignment: .center, spacing: 20) {
+                    chart
+                        .frame(width: 130, height: 130)
 
-                        legend
-                    }
+                    legend
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .dashboardGlass(cornerRadius: 16)
     }
 
     private var chart: some View {

@@ -31,35 +31,36 @@ struct CapitalHeaderCard: View {
     @State private var isPresentingAdjustment = false
 
     var body: some View {
-        Card(tint: .accentColor, padding: 24, topAccent: true) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Label("Capital Actual", systemImage: "wallet.pass.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .labelStyle(.capitalHeader)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Capital Actual", systemImage: "wallet.pass.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .labelStyle(.capitalHeader)
 
-                    Spacer()
+                Spacer()
 
-                    Button {
-                        isPresentingAdjustment = true
-                    } label: {
-                        Image(systemName: "pencil.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Ajustar capital")
+                Button {
+                    isPresentingAdjustment = true
+                } label: {
+                    Image(systemName: "pencil.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Color.accentColor)
                 }
-
-                CurrencyText(
-                    amount: currentCapital,
-                    currency: currency,
-                    size: .large
-                )
+                .buttonStyle(.plain)
+                .accessibilityLabel("Ajustar capital")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            CurrencyText(
+                amount: currentCapital,
+                currency: currency,
+                size: .large
+            )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .dashboardHeroGlass(cornerRadius: 20)
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: currentCapital)
         .sheet(isPresented: $isPresentingAdjustment, onDismiss: onAdjusted) {
             CapitalAdjustmentSheet(modelContext: modelContext, currency: currency)
         }
