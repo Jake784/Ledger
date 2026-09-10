@@ -346,6 +346,7 @@ private struct CategoryFormSheet: View {
                 .overlay(
                     Circle().stroke(Color(hex: color), lineWidth: isSelected ? 0 : 1)
                 )
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
     }

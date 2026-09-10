@@ -21,6 +21,8 @@ import SwiftData
 struct IncomeView: View {
     @State private var viewModel: TransactionListViewModel
     @State private var isPresentingAddTransaction = false
+    @State private var transactionBeingEdited: Transaction?
+    @State private var transactionPendingDeletion: Transaction?
 
     @Query(sort: \Currency.code) private var currencies: [Currency]
     @Query private var userProfiles: [UserProfile]
@@ -69,6 +71,31 @@ struct IncomeView: View {
             if let currency = displayCurrency {
                 AddIncomeSheet(viewModel: viewModel, currency: currency, categories: incomeCategories)
             }
+        }
+        .sheet(item: $transactionBeingEdited, onDismiss: { viewModel.loadTransactions() }) { transaction in
+            if let currency = displayCurrency {
+                AddIncomeSheet(
+                    viewModel: viewModel,
+                    currency: currency,
+                    categories: incomeCategories,
+                    existingTransaction: transaction
+                )
+            }
+        }
+        .alert(
+            "¿Eliminar este ingreso?",
+            isPresented: Binding(
+                get: { transactionPendingDeletion != nil },
+                set: { if !$0 { transactionPendingDeletion = nil } }
+            ),
+            presenting: transactionPendingDeletion
+        ) { transaction in
+            Button("Cancelar", role: .cancel) {}
+            Button("Eliminar", role: .destructive) {
+                deleteTransaction(transaction)
+            }
+        } message: { _ in
+            Text("Esta acción no se puede deshacer.")
         }
     }
 
@@ -131,13 +158,24 @@ struct IncomeView: View {
                                 if index > 0 {
                                     Divider()
                                 }
-                                TransactionRow(transaction: transaction, currency: currency)
+                                TransactionRow(
+                                    transaction: transaction,
+                                    currency: currency,
+                                    onEdit: { transactionBeingEdited = transaction },
+                                    onDelete: { transactionPendingDeletion = transaction }
+                                )
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    // MARK: - Actions
+
+    private func deleteTransaction(_ transaction: Transaction) {
+        try? viewModel.deleteTransaction(transaction)
     }
 
     // MARK: - Derived Data
@@ -162,22 +200,48 @@ struct IncomeView: View {
 /// already handles amount calculation and persistence — this sheet only collects input.
 ///
 /// **Where Used:**
-/// - `IncomeView`'s own "Agregar Ingreso" toolbar action.
+/// - `IncomeView`'s own "Agregar Ingreso" toolbar action, and tapping an existing
+///   row (edit mode, via `existingTransaction`).
 /// - `DashboardView`'s "Agregar Ingreso" quick action, reusing this exact form
 ///   rather than duplicating it.
+/// - `HistoryView`, tapping an income row (edit mode).
 struct AddIncomeSheet: View {
     let viewModel: TransactionListViewModel
     let currency: Currency
     let categories: [Category]
+    let existingTransaction: Transaction?
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var descriptionText: String = ""
-    @State private var amount: Decimal = 0
+    @State private var descriptionText: String
+    @State private var amount: Decimal
     @State private var selectedCategory: Category?
-    @State private var date: Date = Date()
+    @State private var date: Date
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var isPresentingCalendar = false
+
+    /// `existingTransaction`'s `unitPrice` (not `amount`) prefills `amount` below —
+    /// this form always saves with `quantity: 1`, so `unitPrice` IS the number the
+    /// user originally typed into this same field.
+    init(
+        viewModel: TransactionListViewModel,
+        currency: Currency,
+        categories: [Category],
+        existingTransaction: Transaction? = nil
+    ) {
+        self.viewModel = viewModel
+        self.currency = currency
+        self.categories = categories
+        self.existingTransaction = existingTransaction
+
+        _descriptionText = State(initialValue: existingTransaction?.descriptionText ?? "")
+        _amount = State(initialValue: existingTransaction?.unitPrice ?? 0)
+        _selectedCategory = State(initialValue: existingTransaction?.category)
+        _date = State(initialValue: existingTransaction?.date ?? Date())
+    }
+
+    private var isEditing: Bool { existingTransaction != nil }
 
     /// The keyboard-navigable fields, in Tab order. `category` needs an
     /// explicit case (not just auto-focus): a `.menu`-style `Picker` is
@@ -197,14 +261,16 @@ struct AddIncomeSheet: View {
         VStack(spacing: 24) {
             header
 
-            Card {
+            GlassEffectContainer {
                 VStack(alignment: .leading, spacing: 16) {
                     descriptionField
                     amountField
                     categoryPicker
                     datePicker
                 }
+                .padding(20)
             }
+            .formGlassCard()
 
             if let errorMessage {
                 Text(errorMessage)
@@ -230,7 +296,7 @@ struct AddIncomeSheet: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.green)
 
-            Text("Nuevo Ingreso")
+            Text(isEditing ? "Editar Ingreso" : "Nuevo Ingreso")
                 .font(.title2.weight(.bold))
         }
     }
@@ -280,10 +346,41 @@ struct AddIncomeSheet: View {
         // Full Keyboard Access setting.
         .focusable()
         .focused($focusedField, equals: .category)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .formGlassField()
     }
 
+    /// Keeps the native date field (so typing a date still works exactly as
+    /// before) and adds an explicit calendar button that opens a `.graphical`
+    /// popover — closer to Calendar.app than the old plain stepper-only
+    /// field. (`DatePickerStyle.compact` looks identical to `.automatic` for
+    /// a date-only picker on macOS — it doesn't expose its own popover
+    /// trigger here — so the popover is built explicitly instead of relying
+    /// on that style.)
     private var datePicker: some View {
-        DatePicker("Fecha", selection: $date, displayedComponents: .date)
+        HStack(spacing: 8) {
+            DatePicker("Fecha", selection: $date, displayedComponents: .date)
+
+            Spacer(minLength: 0)
+
+            Button {
+                isPresentingCalendar = true
+            } label: {
+                Image(systemName: "calendar")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Elegir fecha en el calendario")
+            .popover(isPresented: $isPresentingCalendar) {
+                DatePicker("Fecha", selection: $date, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .formGlassField()
     }
 
     private var actions: some View {
@@ -321,19 +418,34 @@ struct AddIncomeSheet: View {
         isSaving = true
         errorMessage = nil
 
+        let trimmedDescription = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+
         do {
-            try viewModel.addTransaction(
-                unitPrice: amount,
-                quantity: 1,
-                descriptionText: descriptionText.trimmingCharacters(in: .whitespacesAndNewlines),
-                category: selectedCategory,
-                date: date,
-                currency: currency
-            )
+            if let existingTransaction {
+                try viewModel.updateTransaction(
+                    existingTransaction,
+                    unitPrice: amount,
+                    quantity: 1,
+                    descriptionText: trimmedDescription,
+                    category: selectedCategory,
+                    date: date
+                )
+            } else {
+                try viewModel.addTransaction(
+                    unitPrice: amount,
+                    quantity: 1,
+                    descriptionText: trimmedDescription,
+                    category: selectedCategory,
+                    date: date,
+                    currency: currency
+                )
+            }
             dismiss()
         } catch {
             isSaving = false
-            errorMessage = "No se pudo guardar el ingreso. Inténtalo de nuevo."
+            errorMessage = isEditing
+                ? "No se pudo actualizar el ingreso. Inténtalo de nuevo."
+                : "No se pudo guardar el ingreso. Inténtalo de nuevo."
         }
     }
 }

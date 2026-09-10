@@ -7,24 +7,69 @@
 
 import SwiftUI
 
-/// A single row summarizing one `Transaction`, shared by the Ingresos and Gastos modules.
+/// A single row summarizing one `Transaction`, shared by the Ingresos, Gastos, and
+/// Historial modules.
 ///
 /// Shows the category icon (tinted with the category's own color), description,
 /// category name, date, and a signed amount — green for income, red for expense.
 /// Pending and recurring transactions get their matching `StatusBadge`.
 ///
+/// Clicking the row invokes `onEdit` (meant to present the row's transaction in the
+/// existing Add Income/Add Expense sheet, in edit mode). A trash button reveals on
+/// hover and a right-click context menu offers "Editar"/"Eliminar" — both invoke
+/// `onEdit`/`onDelete`; this view never touches `ModelContext` itself, so the actual
+/// update/delete call (and any confirmation alert before deleting) is the caller's
+/// responsibility, matching every other view in the app that only mutates through
+/// its own ViewModel.
+///
+/// Reuses `hoverHighlight()` (`ViewsSharedHoverEffect.swift`) for both the row body
+/// and the delete button — `scale: 1.0` on the row itself so hovering doesn't scale
+/// content out of alignment with the `Divider`s above/below it in a stacked list.
+///
 /// **Where Used:**
 /// - `IncomeView`'s transaction history
 /// - `ExpensesView`'s transaction history and pending list
+/// - `HistoryView`'s pending and month-grouped sections
 struct TransactionRow: View {
     let transaction: Transaction
     let currency: Currency
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
 
     private var isIncome: Bool { transaction.type == .income }
     private var amountColor: Color { isIncome ? .green : .red }
     private var signedAmount: Decimal { isIncome ? transaction.amount : -transaction.amount }
 
     var body: some View {
+        HStack(spacing: 4) {
+            Button(action: onEdit) {
+                rowContent
+            }
+            .buttonStyle(.plain)
+            .hoverHighlight(scale: 1.0)
+
+            deleteButton
+        }
+        .padding(.vertical, 4)
+        .onHover { isHovered = $0 }
+        .contextMenu {
+            Button {
+                onEdit()
+            } label: {
+                Label("Editar", systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Eliminar", systemImage: "trash")
+            }
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 12) {
             categoryIcon
 
@@ -62,7 +107,27 @@ struct TransactionRow: View {
                 size: .regular
             )
         }
-        .padding(.vertical, 4)
+        // Without this, taps only register on the icon/text/amount's own tight
+        // glyph bounds — not the row's padding or the `Spacer`'s empty space.
+        .contentShape(Rectangle())
+    }
+
+    /// Reserves its width always (rather than conditionally inserting the button)
+    /// so the row's layout doesn't shift when the pointer enters/leaves — only its
+    /// opacity and hit-testing toggle with `isHovered`.
+    private var deleteButton: some View {
+        Button(action: onDelete) {
+            Image(systemName: "trash")
+                .font(.body)
+                .foregroundStyle(.red)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(scale: 1.0)
+        .opacity(isHovered ? 1 : 0)
+        .allowsHitTesting(isHovered)
+        .accessibilityLabel("Eliminar transacción")
     }
 
     private var categoryIcon: some View {
@@ -122,7 +187,9 @@ private extension Color {
                 date: Date(),
                 isPending: false
             ),
-            currency: currency
+            currency: currency,
+            onEdit: {},
+            onDelete: {}
         )
 
         Divider()
@@ -138,7 +205,9 @@ private extension Color {
                 date: Date(),
                 isPending: false
             ),
-            currency: currency
+            currency: currency,
+            onEdit: {},
+            onDelete: {}
         )
 
         Divider()
@@ -155,7 +224,9 @@ private extension Color {
                 isPending: true,
                 recurrenceRule: RecurrenceRule(frequency: .monthly, startDate: Date())
             ),
-            currency: currency
+            currency: currency,
+            onEdit: {},
+            onDelete: {}
         )
     }
     .padding()

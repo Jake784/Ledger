@@ -12,13 +12,22 @@ import SwiftData
 /// income and expense transaction, with filtering by type, category, description, and date.
 ///
 /// Mirrors `DashboardView`/`IncomeView`/`ExpensesView`'s architecture: the view never
-/// touches `ModelContext` directly, only through `HistoryViewModel`. `Currency` and
-/// `Category` are read via `@Query`, the same read-only pattern those views already use.
+/// touches `ModelContext` directly, only through `HistoryViewModel` — plus, for editing
+/// (see `incomeViewModel`/`expenseViewModel` below), the same per-type
+/// `TransactionListViewModel` every other module already uses. `Currency` and `Category`
+/// are read via `@Query`, the same read-only pattern those views already use.
 ///
 /// **Where Used:**
 /// - `ContentView`'s detail switch, for `SidebarModule.historial`.
 struct HistoryView: View {
     @State private var viewModel: HistoryViewModel
+
+    /// Held purely so `AddIncomeSheet`/`AddExpenseSheet` — typed to `TransactionListViewModel`,
+    /// exactly like `DashboardView`'s own quick-action sheets — have something to save an
+    /// edit through. Never used for reading/displaying data here; `viewModel.loadTransactions()`
+    /// (called on the edit sheet's `onDismiss`) is what refreshes what this view actually shows.
+    @State private var incomeViewModel: TransactionListViewModel
+    @State private var expenseViewModel: TransactionListViewModel
 
     @Query(sort: \Currency.code) private var currencies: [Currency]
     @Query private var userProfiles: [UserProfile]
@@ -31,8 +40,16 @@ struct HistoryView: View {
     @State private var startDate: Date = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
     @State private var endDate: Date = Date()
 
+    @State private var sortOrder: HistorySortOrder = .newestFirst
+    @State private var isFilterPanelExpanded = false
+
+    @State private var transactionBeingEdited: Transaction?
+    @State private var transactionPendingDeletion: Transaction?
+
     init(modelContext: ModelContext) {
         _viewModel = State(initialValue: HistoryViewModel(modelContext: modelContext))
+        _incomeViewModel = State(initialValue: TransactionListViewModel(modelContext: modelContext, type: .income))
+        _expenseViewModel = State(initialValue: TransactionListViewModel(modelContext: modelContext, type: .expense))
     }
 
     var body: some View {
@@ -46,7 +63,11 @@ struct HistoryView: View {
                 .padding(.top, 60)
             } else if let currency = displayCurrency {
                 VStack(alignment: .leading, spacing: 24) {
-                    filterBar
+                    if isFilterPanelExpanded {
+                        filterBar
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
                     pendingSection(currency: currency)
                     historySection(currency: currency)
                 }
@@ -60,6 +81,82 @@ struct HistoryView: View {
         .onAppear {
             viewModel.loadTransactions()
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                toolbar
+            }
+        }
+        .sheet(item: $transactionBeingEdited, onDismiss: { viewModel.loadTransactions() }) { transaction in
+            if let currency = displayCurrency {
+                editSheet(for: transaction, currency: currency)
+            }
+        }
+        .alert(
+            deleteAlertTitle,
+            isPresented: Binding(
+                get: { transactionPendingDeletion != nil },
+                set: { if !$0 { transactionPendingDeletion = nil } }
+            ),
+            presenting: transactionPendingDeletion
+        ) { transaction in
+            Button("Cancelar", role: .cancel) {}
+            Button("Eliminar", role: .destructive) {
+                deleteTransaction(transaction)
+            }
+        } message: { _ in
+            Text("Esta acción no se puede deshacer.")
+        }
+    }
+
+    /// Routes to `AddIncomeSheet` or `AddExpenseSheet` based on the tapped transaction's
+    /// own `type` — both already support edit mode via `existingTransaction`, and reuse
+    /// the type-matching `incomeViewModel`/`expenseViewModel` held above to save the change.
+    @ViewBuilder
+    private func editSheet(for transaction: Transaction, currency: Currency) -> some View {
+        switch transaction.type {
+        case .income:
+            AddIncomeSheet(
+                viewModel: incomeViewModel,
+                currency: currency,
+                categories: allCategories.filter { $0.type == .income },
+                existingTransaction: transaction
+            )
+        case .expense:
+            AddExpenseSheet(
+                viewModel: expenseViewModel,
+                currency: currency,
+                categories: allCategories.filter { $0.type == .expense },
+                existingTransaction: transaction
+            )
+        case .capitalAdjustment:
+            EmptyView()
+        }
+    }
+
+    private var deleteAlertTitle: String {
+        switch transactionPendingDeletion?.type {
+        case .income: return "¿Eliminar este ingreso?"
+        case .expense: return "¿Eliminar este gasto?"
+        case .capitalAdjustment, .none: return "¿Eliminar esta transacción?"
+        }
+    }
+
+    private func deleteTransaction(_ transaction: Transaction) {
+        try? viewModel.deleteTransaction(transaction)
+    }
+
+    // MARK: - Toolbar
+
+    /// Hosted via `.toolbar(placement: .primaryAction)` above, so it sits inline with
+    /// the "Historial" navigation title — the same native title-bar row Finder's own
+    /// toolbar occupies — instead of as a separate row in the scrollable content.
+    private var toolbar: some View {
+        HistoryToolbar(
+            sortOrder: $sortOrder,
+            isFilterPanelExpanded: $isFilterPanelExpanded,
+            searchText: $searchText,
+            hasActiveFilters: hasActiveFilters
+        )
     }
 
     // MARK: - Filters
@@ -67,9 +164,6 @@ struct HistoryView: View {
     private var filterBar: some View {
         Card {
             VStack(alignment: .leading, spacing: 16) {
-                TextField("Buscar por descripción", text: $searchText)
-                    .textFieldStyle(.plain)
-
                 Picker("Tipo", selection: $selectedType) {
                     Text("Todos").tag(TransactionType?.none)
                     Text("Ingresos").tag(TransactionType?.some(.income))
@@ -128,7 +222,8 @@ struct HistoryView: View {
             type: selectedType,
             searchText: searchText,
             category: selectedCategory,
-            dateRange: dateRange
+            dateRange: dateRange,
+            sortAscending: sortOrder == .oldestFirst
         )
     }
 
@@ -147,7 +242,12 @@ struct HistoryView: View {
                             if index > 0 {
                                 Divider()
                             }
-                            TransactionRow(transaction: transaction, currency: currency)
+                            TransactionRow(
+                                transaction: transaction,
+                                currency: currency,
+                                onEdit: { transactionBeingEdited = transaction },
+                                onDelete: { transactionPendingDeletion = transaction }
+                            )
                         }
                     }
                 }
@@ -157,10 +257,7 @@ struct HistoryView: View {
 
     private func historySection(currency: Currency) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Historial")
-                .font(.headline)
-
-            let groups = viewModel.groupedByMonth(filteredTransactions)
+            let groups = viewModel.groupedByMonth(filteredTransactions, sortAscending: sortOrder == .oldestFirst)
 
             if groups.isEmpty {
                 EmptyStateView(
@@ -192,7 +289,12 @@ struct HistoryView: View {
                                     if index > 0 {
                                         Divider()
                                     }
-                                    TransactionRow(transaction: transaction, currency: currency)
+                                    TransactionRow(
+                                        transaction: transaction,
+                                        currency: currency,
+                                        onEdit: { transactionBeingEdited = transaction },
+                                        onDelete: { transactionPendingDeletion = transaction }
+                                    )
                                 }
                             }
                         }

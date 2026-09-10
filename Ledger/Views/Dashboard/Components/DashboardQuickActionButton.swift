@@ -41,6 +41,7 @@ struct DashboardQuickActionButton: View {
                     .strokeBorder(accentColor.opacity(0.3), lineWidth: 1.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 14))
+            .hoverHighlight()
         }
         .buttonStyle(.plain)
     }

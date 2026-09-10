@@ -776,6 +776,7 @@ private struct ProjectionItemFormSheet: View {
                 .padding(.vertical, 8)
                 .background(isSelected ? Color.accentColor : Color.accentColor.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
     }

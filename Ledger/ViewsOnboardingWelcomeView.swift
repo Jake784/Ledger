@@ -135,6 +135,7 @@ struct WelcomeView: View {
                 .overlay(
                     Circle().stroke(Color.accentColor, lineWidth: isSelected ? 0 : 1)
                 )
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
     }

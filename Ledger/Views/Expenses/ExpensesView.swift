@@ -29,6 +29,8 @@ import SwiftData
 struct ExpensesView: View {
     @State private var viewModel: TransactionListViewModel
     @State private var isPresentingAddTransaction = false
+    @State private var transactionBeingEdited: Transaction?
+    @State private var transactionPendingDeletion: Transaction?
 
     @Query(sort: \Currency.code) private var currencies: [Currency]
     @Query private var userProfiles: [UserProfile]
@@ -78,6 +80,31 @@ struct ExpensesView: View {
             if let currency = displayCurrency {
                 AddExpenseSheet(viewModel: viewModel, currency: currency, categories: expenseCategories)
             }
+        }
+        .sheet(item: $transactionBeingEdited, onDismiss: { viewModel.loadTransactions() }) { transaction in
+            if let currency = displayCurrency {
+                AddExpenseSheet(
+                    viewModel: viewModel,
+                    currency: currency,
+                    categories: expenseCategories,
+                    existingTransaction: transaction
+                )
+            }
+        }
+        .alert(
+            "¿Eliminar este gasto?",
+            isPresented: Binding(
+                get: { transactionPendingDeletion != nil },
+                set: { if !$0 { transactionPendingDeletion = nil } }
+            ),
+            presenting: transactionPendingDeletion
+        ) { transaction in
+            Button("Cancelar", role: .cancel) {}
+            Button("Eliminar", role: .destructive) {
+                deleteTransaction(transaction)
+            }
+        } message: { _ in
+            Text("Esta acción no se puede deshacer.")
         }
     }
 
@@ -135,7 +162,12 @@ struct ExpensesView: View {
 
     private func pendingRow(_ transaction: Transaction, currency: Currency) -> some View {
         HStack {
-            TransactionRow(transaction: transaction, currency: currency)
+            TransactionRow(
+                transaction: transaction,
+                currency: currency,
+                onEdit: { transactionBeingEdited = transaction },
+                onDelete: { transactionPendingDeletion = transaction }
+            )
 
             Button {
                 completePending(transaction)
@@ -177,7 +209,12 @@ struct ExpensesView: View {
                                 if index > 0 {
                                     Divider()
                                 }
-                                TransactionRow(transaction: transaction, currency: currency)
+                                TransactionRow(
+                                    transaction: transaction,
+                                    currency: currency,
+                                    onEdit: { transactionBeingEdited = transaction },
+                                    onDelete: { transactionPendingDeletion = transaction }
+                                )
                             }
                         }
                     }
@@ -190,6 +227,10 @@ struct ExpensesView: View {
 
     private func completePending(_ transaction: Transaction) {
         try? viewModel.completePendingTransaction(transaction)
+    }
+
+    private func deleteTransaction(_ transaction: Transaction) {
+        try? viewModel.deleteTransaction(transaction)
     }
 
     // MARK: - Derived Data
@@ -216,13 +257,16 @@ struct ExpensesView: View {
 /// `RecurrenceRule` persistence, and reloading — this sheet only collects input.
 ///
 /// **Where Used:**
-/// - `ExpensesView`'s own "Agregar Gasto" toolbar action.
+/// - `ExpensesView`'s own "Agregar Gasto" toolbar action, and tapping an existing
+///   row (edit mode, via `existingTransaction`).
 /// - `DashboardView`'s "Agregar Gasto" quick action, reusing this exact form
 ///   rather than duplicating it.
+/// - `HistoryView`, tapping an expense row (edit mode).
 struct AddExpenseSheet: View {
     let viewModel: TransactionListViewModel
     let currency: Currency
     let categories: [Category]
+    let existingTransaction: Transaction?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -232,15 +276,44 @@ struct AddExpenseSheet: View {
         var id: String { rawValue }
     }
 
-    @State private var entryKind: EntryKind = .puntual
-    @State private var descriptionText: String = ""
-    @State private var amount: Decimal = 0
+    @State private var entryKind: EntryKind
+    @State private var descriptionText: String
+    @State private var amount: Decimal
     @State private var selectedCategory: Category?
-    @State private var date: Date = Date()
+    @State private var date: Date
     @State private var isRecurring = false
     @State private var frequency: RecurrenceFrequency = .monthly
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var isPresentingCalendar = false
+
+    /// `existingTransaction`'s `unitPrice` (not `amount`) prefills `amount` below —
+    /// this form always saves with `quantity: 1`, so `unitPrice` IS the number the
+    /// user originally typed into this same field. `entryKind` prefills from
+    /// `isPending` purely so `datePicker`'s "Fecha Prevista" vs. "Fecha" label stays
+    /// accurate while editing — the picker itself is hidden in edit mode (see
+    /// `entryKindPicker`'s call site in `body`), since converting between puntual
+    /// and pendiente, or editing recurrence, isn't something `updateTransaction`
+    /// supports (that's `completePendingTransaction`'s job elsewhere).
+    init(
+        viewModel: TransactionListViewModel,
+        currency: Currency,
+        categories: [Category],
+        existingTransaction: Transaction? = nil
+    ) {
+        self.viewModel = viewModel
+        self.currency = currency
+        self.categories = categories
+        self.existingTransaction = existingTransaction
+
+        _entryKind = State(initialValue: existingTransaction?.isPending == true ? .pendiente : .puntual)
+        _descriptionText = State(initialValue: existingTransaction?.descriptionText ?? "")
+        _amount = State(initialValue: existingTransaction?.unitPrice ?? 0)
+        _selectedCategory = State(initialValue: existingTransaction?.category)
+        _date = State(initialValue: existingTransaction?.date ?? Date())
+    }
+
+    private var isEditing: Bool { existingTransaction != nil }
 
     /// The keyboard-navigable fields, in Tab order. `category` needs an
     /// explicit case (not just auto-focus): a `.menu`-style `Picker` is
@@ -260,21 +333,25 @@ struct AddExpenseSheet: View {
         VStack(spacing: 24) {
             header
 
-            Card {
+            GlassEffectContainer {
                 VStack(alignment: .leading, spacing: 16) {
-                    entryKindPicker
+                    if !isEditing {
+                        entryKindPicker
+                    }
                     descriptionField
                     amountField
                     categoryPicker
                     datePicker
-                    if entryKind == .pendiente {
+                    if entryKind == .pendiente && !isEditing {
                         recurrenceToggle
                         if isRecurring {
                             frequencyPicker
                         }
                     }
                 }
+                .padding(20)
             }
+            .formGlassCard()
 
             if let errorMessage {
                 Text(errorMessage)
@@ -300,18 +377,35 @@ struct AddExpenseSheet: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.red)
 
-            Text("Nuevo Gasto")
+            Text(isEditing ? "Editar Gasto" : "Nuevo Gasto")
                 .font(.title2.weight(.bold))
         }
     }
 
+    /// A glass-pill segmented toggle for `entryKind`, replacing the native
+    /// `.segmented` picker's flat blue fill — same glass-capsule-on-selection
+    /// idiom as the sidebar's `SidebarRow` (`ViewsSharedNavigationSidebar.swift`),
+    /// reused here for visual consistency rather than reinvented. No nested
+    /// `GlassEffectContainer` needed — the whole form body already sits
+    /// inside one (see `body`), which is where these glass effects render.
     private var entryKindPicker: some View {
-        Picker("Tipo", selection: $entryKind) {
+        HStack(spacing: 4) {
             ForEach(EntryKind.allCases) { kind in
-                Text(kind.rawValue).tag(kind)
+                EntryKindToggleButton(
+                    title: kind.rawValue,
+                    isSelected: entryKind == kind,
+                    action: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            entryKind = kind
+                        }
+                    }
+                )
             }
         }
-        .pickerStyle(.segmented)
+        .padding(4)
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tipo")
     }
 
     private var descriptionField: some View {
@@ -359,10 +453,45 @@ struct AddExpenseSheet: View {
         // Full Keyboard Access setting.
         .focusable()
         .focused($focusedField, equals: .category)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .formGlassField()
     }
 
+    /// Keeps the native date field (so typing a date still works exactly as
+    /// before) and adds an explicit calendar button that opens a `.graphical`
+    /// popover — closer to Calendar.app than the old plain stepper-only
+    /// field. (`DatePickerStyle.compact` looks identical to `.automatic` for
+    /// a date-only picker on macOS — it doesn't expose its own popover
+    /// trigger here — so the popover is built explicitly instead of relying
+    /// on that style.)
     private var datePicker: some View {
-        DatePicker(entryKind == .pendiente ? "Fecha Prevista" : "Fecha", selection: $date, displayedComponents: .date)
+        HStack(spacing: 8) {
+            DatePicker(entryKind == .pendiente ? "Fecha Prevista" : "Fecha", selection: $date, displayedComponents: .date)
+
+            Spacer(minLength: 0)
+
+            Button {
+                isPresentingCalendar = true
+            } label: {
+                Image(systemName: "calendar")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Elegir fecha en el calendario")
+            .popover(isPresented: $isPresentingCalendar) {
+                DatePicker(
+                    entryKind == .pendiente ? "Fecha Prevista" : "Fecha",
+                    selection: $date,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                .padding()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .formGlassField()
     }
 
     private var recurrenceToggle: some View {
@@ -415,36 +544,81 @@ struct AddExpenseSheet: View {
         let trimmedDescription = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            switch entryKind {
-            case .puntual:
-                try viewModel.addTransaction(
+            if let existingTransaction {
+                try viewModel.updateTransaction(
+                    existingTransaction,
                     unitPrice: amount,
                     quantity: 1,
                     descriptionText: trimmedDescription,
                     category: selectedCategory,
-                    date: date,
-                    currency: currency
+                    date: date
                 )
-            case .pendiente:
-                let recurrenceRule: RecurrenceRule? = isRecurring
-                    ? RecurrenceRule(frequency: frequency, startDate: date)
-                    : nil
+            } else {
+                switch entryKind {
+                case .puntual:
+                    try viewModel.addTransaction(
+                        unitPrice: amount,
+                        quantity: 1,
+                        descriptionText: trimmedDescription,
+                        category: selectedCategory,
+                        date: date,
+                        currency: currency
+                    )
+                case .pendiente:
+                    let recurrenceRule: RecurrenceRule? = isRecurring
+                        ? RecurrenceRule(frequency: frequency, startDate: date)
+                        : nil
 
-                try viewModel.addPendingTransaction(
-                    unitPrice: amount,
-                    quantity: 1,
-                    descriptionText: trimmedDescription,
-                    category: selectedCategory,
-                    date: date,
-                    currency: currency,
-                    recurrenceRule: recurrenceRule
-                )
+                    try viewModel.addPendingTransaction(
+                        unitPrice: amount,
+                        quantity: 1,
+                        descriptionText: trimmedDescription,
+                        category: selectedCategory,
+                        date: date,
+                        currency: currency,
+                        recurrenceRule: recurrenceRule
+                    )
+                }
             }
             dismiss()
         } catch {
             isSaving = false
-            errorMessage = "No se pudo guardar el gasto. Inténtalo de nuevo."
+            errorMessage = isEditing
+                ? "No se pudo actualizar el gasto. Inténtalo de nuevo."
+                : "No se pudo guardar el gasto. Inténtalo de nuevo."
         }
+    }
+}
+
+/// A single segment of `AddExpenseSheet`'s `entryKindPicker`; becomes a
+/// tinted glass capsule while selected. Mirrors `SidebarRow`
+/// (`ViewsSharedNavigationSidebar.swift`) — including its `.contentShape`
+/// fix, so this control doesn't reintroduce the same dead-zone click bug.
+private struct EntryKindToggleButton: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            if isSelected {
+                label.glassEffect(.regular.tint(Color.accentColor.opacity(0.25)), in: .capsule)
+            } else {
+                label
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private var label: some View {
+        Text(title)
+            .font(.subheadline)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
     }
 }
 

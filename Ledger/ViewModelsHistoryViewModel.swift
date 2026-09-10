@@ -19,7 +19,13 @@ import Observation
 /// transaction history) and adds a `type` axis to its filtering.
 ///
 /// **SwiftData Integration:**
-/// - All mutations happen elsewhere (Income/Expenses modules); this ViewModel is read-only.
+/// - Transactions are created and edited elsewhere: creation happens in the Income/Expenses
+///   modules, and editing an entry from Historial goes through a per-type
+///   `TransactionListViewModel` instance (`HistoryView` holds one of each) — the shared
+///   Add/Edit sheet is typed to that concrete class, which History, spanning both types,
+///   has no single instance of. This ViewModel does own deletion directly (`deleteTransaction`
+///   below), since that reloads exactly the combined list this ViewModel displays, rather
+///   than reloading a per-type list nothing here reads.
 /// - Uses Decimal arithmetic for financial precision.
 @Observable
 final class HistoryViewModel {
@@ -81,6 +87,27 @@ final class HistoryViewModel {
         }
     }
 
+    // MARK: - Delete
+
+    /// Deletes a transaction from SwiftData.
+    ///
+    /// **Note:** If the transaction has a recurrence rule, it will also be deleted
+    /// due to the cascade delete rule on `Transaction.recurrenceRule`.
+    ///
+    /// - Parameter transaction: The transaction to delete.
+    /// - Throws: An error if the save operation fails.
+    func deleteTransaction(_ transaction: Transaction) throws {
+        modelContext.delete(transaction)
+
+        do {
+            try modelContext.save()
+            loadTransactions()
+        } catch {
+            print("Failed to delete transaction: \(error)")
+            throw error
+        }
+    }
+
     // MARK: - Filtering
 
     /// Filters completed transactions based on transaction type, search text, category, and date range.
@@ -92,12 +119,16 @@ final class HistoryViewModel {
     ///   - searchText: Text to search in description (case-insensitive). Empty string means no filter.
     ///   - category: Category to filter by. Nil means no filter.
     ///   - dateRange: Date range to filter by. Nil means no filter.
-    /// - Returns: Filtered array of transactions, maintaining date descending order.
+    ///   - sortAscending: When `true`, returns oldest-first instead of the default newest-first
+    ///     (`transactions` is already newest-first, so this only re-sorts when the caller
+    ///     actually asked for the reverse — e.g. `HistoryToolbar`'s sort menu).
+    /// - Returns: Filtered array of transactions.
     func filteredTransactions(
         type: TransactionType?,
         searchText: String,
         category: Category?,
-        dateRange: ClosedRange<Date>?
+        dateRange: ClosedRange<Date>?,
+        sortAscending: Bool = false
     ) -> [Transaction] {
         var filtered = transactions
 
@@ -119,6 +150,10 @@ final class HistoryViewModel {
             filtered = filtered.filter { dateRange.contains($0.date) }
         }
 
+        if sortAscending {
+            filtered = filtered.sorted { $0.date < $1.date }
+        }
+
         return filtered
     }
 
@@ -130,10 +165,16 @@ final class HistoryViewModel {
     /// type into one subtotal), each group's total nets income against expense, since History
     /// combines both — `netTotal` is positive when income outweighs expense in that month.
     ///
-    /// - Parameter transactions: The transactions to group (typically the result of
-    ///   `filteredTransactions`, or `self.transactions` for the unfiltered view).
-    /// - Returns: Array of month groups, most recent month first.
-    func groupedByMonth(_ transactions: [Transaction]) -> [(month: String, transactions: [Transaction], netTotal: Decimal)] {
+    /// - Parameters:
+    ///   - transactions: The transactions to group (typically the result of
+    ///     `filteredTransactions`, or `self.transactions` for the unfiltered view).
+    ///   - sortAscending: Ordering applied both within each month group and across
+    ///     months. Must match whatever `sortAscending` the caller already passed to
+    ///     `filteredTransactions` — passed explicitly (not inferred from the input array)
+    ///     so this stays correct even for a single-transaction or same-day group, where
+    ///     the array's own order can't tell ascending from descending.
+    /// - Returns: Array of month groups, most recent month first by default.
+    func groupedByMonth(_ transactions: [Transaction], sortAscending: Bool = false) -> [(month: String, transactions: [Transaction], netTotal: Decimal)] {
         var groups: [String: [Transaction]] = [:]
 
         let dateFormatter = DateFormatter()
@@ -148,7 +189,9 @@ final class HistoryViewModel {
         var result: [(month: String, transactions: [Transaction], netTotal: Decimal)] = []
 
         for (monthKey, monthTransactions) in groups {
-            let sorted = monthTransactions.sorted { $0.date > $1.date }
+            let sorted = sortAscending
+                ? monthTransactions.sorted { $0.date < $1.date }
+                : monthTransactions.sorted { $0.date > $1.date }
 
             let netTotal = sorted.reduce(Decimal(0)) { total, transaction in
                 transaction.type == .income ? total + transaction.amount : total - transaction.amount
@@ -162,7 +205,7 @@ final class HistoryViewModel {
                   let date2 = group2.transactions.first?.date else {
                 return false
             }
-            return date1 > date2
+            return sortAscending ? date1 < date2 : date1 > date2
         }
 
         return result

@@ -39,6 +39,12 @@ struct PrimaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isEnabled ? Color.accentColor : Color.gray)
             )
+            // The `.frame(maxWidth: .infinity)` above only expands the
+            // *layout* size — without this, taps on the filled background
+            // outside the label's own tight glyph bounds (e.g. the padding
+            // around a short title) don't register. Every custom button
+            // style in this file needs its own copy of this fix.
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
@@ -76,6 +82,7 @@ struct SecondaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(isEnabled ? Color.accentColor : Color.gray, lineWidth: 2)
             )
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
@@ -111,6 +118,7 @@ struct DestructiveButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isEnabled ? Color.red : Color.gray)
             )
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
@@ -145,6 +153,7 @@ struct CompactButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(color)
             )
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
